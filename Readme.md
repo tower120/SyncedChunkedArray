@@ -1,6 +1,24 @@
+## Description
+
+`SyncedChunkedArray` is thread-safe, unordered deque-like container, which allow iteration with thread-safe element access at `std::deque` / `std::vector` speed. Plus it have non-invalidatable iterators (`trackable_iterator`).
+
+High iteration speed achieved by:
+
+- elements stored continuously in chunks.
+- You don't need to lock each element separately.
+- Locked chunks iteration postponed.
+
+Thread-safe element access works on per-chunk lock basis. Lock chunk - lock its all elements. This, may introduce some lock granularity, when accessing from multiple threads to elements from the same chunk (through `trackable_iterator`); you'll have sequenced access at worst case. Smaller chunks - means smaller granularity.
+
+You can use it without thread-safe element access ability - just use `_shared` versions (`iterate_shared` / `trackable_iterator::lock_shared`).
+
+You may call `emplace` /`erase` at any time, even right from the iteration loop. Have roughly O(1) complexity.
+
 ## Structure
 
-SyncedChunkedArray is a deque-like container. It consists from `Chunk`s of fixed size.
+SyncedChunkedArray is a deque-like container. It consists from `Chunk`s of fixed size. 
+
+Target `Chunk` size is 4Kb. Higher size does not affect performance at i7-4771 (may be because 4Kb - is L1 data cache size). Minimal is 32; at smaller sizes, chunk lock/unlock overhead becomes observable.
 
  `Chunk` looks like:
 
@@ -15,6 +33,10 @@ struct Chunk{
 ```
 
 Lock is recursive RWSpinLock with level counter (we maintain only at level 1). Recursive is only lock part. See implementation for details.
+
+Recursivity needed for cases when we need to lock a few elements from the same chunk simultaneously.
+
+RWSpinLock needed for `iterate_shared()`,  `trackable_iterator::lock_shared()`. Otherwise SpinLock will be fine.
 
 ## Iteration
 
