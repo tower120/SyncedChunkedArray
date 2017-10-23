@@ -67,12 +67,15 @@ Thus, we can iterate from multiple threads, without need to lock each element se
 
 ## Maintance
 
-maintance include:
+Maintance may occur only on locked `Chunk::lock`.
+
+Maintance include:
+
  * compacting chunk
  * merging adjacence chunks
  * deleting empty chunk
 
-If during maintance chunk was not destroyed, and it is not full - we add it to `free_list` (we use it in emplace).
+If during maintance chunk was not destroyed, and it is not full - we add it to `free_list` (we use it in `emplace()`).
 
 #### Deleting
 
