@@ -14,6 +14,41 @@ You can use it without thread-safe element access ability - just use `_shared` v
 
 You may call `emplace` /`erase` at any time, even right from the iteration loop. Have roughly O(1) complexity.
 
+## How to use
+
+You need `SyncedChunkedArray.h` and `threading` folder.
+Example:
+
+```C++
+#include "SyncedChunkedArray.h"
+
+int main(){
+  SyncedChunkedArray<int> list;
+  for(int i=0;i<4000;i++)list.emplace(i);
+
+  SyncedChunkedArray<int>::trackable_iterator two_iter = list.emplace(2)();
+  
+  auto fn = [&](){
+    list.iterate([&](auto iter){
+      if (*iter > 500){
+        list.erase(iter);
+      } else {
+        (*iter)++;
+      }
+    });
+  };
+  
+  std::thread t1(fn);
+  std::thread t2(fn);
+  t1.join();
+  t2.join();
+  
+  std::cout << *two_iter.lock();    // Output: 4
+  
+  return 0;
+}
+```
+
 ## Structure
 
 SyncedChunkedArray is a deque-like container. It consists from `Chunk`s of fixed size. 
@@ -22,7 +57,7 @@ Target `Chunk` size is 4Kb. Higher size does not affect performance at i7-4771 (
 
  `Chunk` looks like:
 
-```
+```C++
 struct Chunk{
     Lock lock;
 
@@ -43,7 +78,7 @@ RWSpinLock needed for `iterate_shared()`,  `trackable_iterator::lock_shared()`. 
 During iteration we try to lock each chunk, if we fail to lock - store that chunk, and skip it.
 After we lock chunk, we iterate all chunk data, skipping not alive. At the end, we do chunk maintance procedure, and unlock chunk.
 
-```
+```C++
 std::vector<Chunk*> skipped;
 chunk = first;
 while(chunk){
@@ -109,6 +144,6 @@ We try to reuse not full chunks (from `free_list`), before we create new one. `e
 
 You can get it from `emplace()` and construct from `Iterator` (during `iterate()`).
 
-When maintance occurs, element may be moved. If element have trackable_iterators, they all updated with it new address (actually chunk/index).
+When maintance occurs, element may be moved. If element have trackable_iterators, they all will be updated with it new address (actually chunk/index).
 
 Price to call `trackable_iterator.lock()` is similar to `weak_ptr.lock()`. But unlike `weak_ptr.lock()` which only guarantee object aliveness, `trackable_iterator` also provide object thread-safety.
