@@ -12,6 +12,7 @@
 #include "threading/src/threading/SpinLock.h"
 #include "threading/src/threading/Recursive.h"
 #include "threading/src/threading/RecursiveLevelCounter.h"
+#include "threading/src/threading/lock_functional.h"
 #include <cassert>
 #include <vector>
 #include <atomic>
@@ -21,12 +22,14 @@
 
 template<class T, std::size_t chunk_size_t = std::max<std::size_t>(
         32,
-        (std::size_t) (2048.0 / sizeof(T))    /* 4048 - best performance (higher has no effect) */
+        (std::size_t) (4096.0 / sizeof(T))    /* 4048 - best performance (higher has no effect) */
 )>
 class SyncedChunkedArray {
     struct settings {
-        static constexpr const bool erase_immideatley = true;                   // false - for potentially higher speed
+        static constexpr const bool erase_immideatley = false;                   // false - for potentially higher speed
         static constexpr const bool trackable_iterator_check_aliveness = false;
+
+        static constexpr const bool skip_locked_chunks_on_iteration = true;        // important. Must be true.
     };
 
     using Self = SyncedChunkedArray<T, chunk_size_t>;
@@ -139,14 +142,16 @@ private:
         };
         Trackable trackables[chunk_size_t];
 
+        bool is_alive_fast_check(std::size_t index) const{
+            // #https://stackoverflow.com/questions/46680842/c-stdmemory-order-relaxed-and-skip-stop-flag
+            return aliveness[index].load(settings::erase_immideatley ? std::memory_order_acquire : std::memory_order_relaxed);
+        }
+
         template<class Closure>
         void iterate(Closure &&closure) {
             const std::size_t size = this->size;
             for (std::size_t i = 0; i < size; i++) {
-                // #https://stackoverflow.com/questions/46680842/c-stdmemory-order-relaxed-and-skip-stop-flag
-                if (!aliveness[i].load(
-                        settings::erase_immideatley ? std::memory_order_acquire : std::memory_order_relaxed))
-                    continue;
+                if (!is_alive_fast_check(i)) continue;
                 closure(Iterator{this, i});
             }
         }
@@ -195,14 +200,14 @@ private:
         Chunk *get_first_under_maintance_lock(std::unique_lock<typename Chunk::MaintanceLock> &l_maintance) {
             if (is_empty) return nullptr;
 
-            // dead lock free
-            while (true) {
-                std::unique_lock l(lock);
-                if (first->maintance_lock.try_lock()) {
-                    l_maintance = std::unique_lock{first->maintance_lock, std::adopt_lock};
-                    return first;
-                }
-            }
+            auto locks = threading::lock_functional(
+                [&](){ return &lock; },
+                [&](){ return &first->maintance_lock; }
+            );
+
+            l_maintance = std::move(std::get<1>(locks));
+
+            return first;
         }
 
         void erase(Chunk *chunk, std::unique_lock<typename Chunk::MaintanceLock> &chunk_maintance_lock) {
@@ -270,9 +275,7 @@ private:
     }
 
 
-    static void track_move_element(
-            Chunk *chunk_from, std::size_t index_from, Chunk *chunk_to, std::size_t index_to
-    ) {
+    static void track_move_element(Chunk *chunk_from, std::size_t index_from, Chunk *chunk_to, std::size_t index_to) {
         if (index_from == index_to && chunk_from == chunk_to) return;
 
         auto &trackable_from = chunk_from->trackables[index_from];
@@ -396,10 +399,9 @@ private:
         // chunk must be under unique_lock + maintance lock to be deleted
         auto remove_chunk = [&](Chunk *chunk) {
             chunk_self = chunk->shared_from_this();      assert(chunk_self);
-            std::shared_ptr < Chunk > prev = std::atomic_load(&chunk->prev);
-            std::shared_ptr < Chunk > next = std::atomic_load(&chunk->next);
+            std::shared_ptr<Chunk> prev = std::atomic_load(&chunk->prev);
+            std::shared_ptr<Chunk> next = std::atomic_load(&chunk->next);
 
-            //assert(prev);   // we do not delete/merge first chunk, so prev must exists
             if (prev){
                 std::shared_ptr<Chunk> self = chunk_self;
                 std::atomic_compare_exchange_strong(&prev->next, &self, next);
@@ -410,9 +412,9 @@ private:
                 std::atomic_compare_exchange_strong(&next->prev, &self, prev);
             }
 
-            // unlink
+            // unlink prev
             const std::shared_ptr<Chunk> chunk_null{nullptr};
-            std::atomic_store(&prev, chunk_null);
+            std::atomic_store(&chunk->prev, chunk_null);
         };
 
         auto can_merge = [](Chunk *chunk, Chunk *other) -> bool {
@@ -627,7 +629,7 @@ public:
         }
 
 
-        std::size_t index = chunk->emplace(std::forward<Args>(args)...);
+        const std::size_t index = chunk->emplace(std::forward<Args>(args)...);
 
 
         if (chunk->in_free_list && chunk->is_full()) {
@@ -662,6 +664,9 @@ public:
         std::vector<std::shared_ptr<Chunk>> skipped;    // TODO: put to thread_local / or use small_vector
 
 
+        auto lock_chunk = [](Chunk *chunk) {
+            return shared ? chunk->lock.lock_shared() : chunk->lock.lock();
+        };
         auto try_lock_chunk = [](Chunk *chunk) {
             return shared ? chunk->lock.try_lock_shared() : chunk->lock.try_lock();
         };
@@ -684,10 +689,15 @@ public:
             }
 
             while (chunk) {
-                if (try_lock_chunk(chunk.get())) {
-                    iterate_and_unlock(chunk.get());
+                if (settings::skip_locked_chunks_on_iteration) {
+                    if (try_lock_chunk(chunk.get())) {
+                        iterate_and_unlock(chunk.get());
+                    } else {
+                        skipped.emplace_back(chunk);
+                    }
                 } else {
-                    skipped.emplace_back(chunk);
+                    lock_chunk(chunk.get());
+                    iterate_and_unlock(chunk.get());
                 }
 
                 chunk = std::atomic_load(&chunk->next);
@@ -736,7 +746,7 @@ public:
     class trackable_iterator {
         friend Self;
 
-        Chunk *chunk{nullptr};      // if use shared_ptr<Chunk> ~SyncChunkedArray() can be lockless
+        Chunk *chunk{nullptr};      // if use shared_ptr<Chunk> ~SyncChunkedArray() may be lockless?
         std::size_t index;
 
         typename Chunk::Trackable &trackable() { return chunk->trackables[index]; }
@@ -748,24 +758,6 @@ public:
         using Lock = threading::SpinLock<threading::SpinLockMode::Nonstop>;
         mutable Lock m_lock;
 
-        // closure will not be executed if no chunk
-        template<class Closure>
-        void under_trackable_lock(Closure &&closure) {
-            typename Chunk::Trackable *trackable;
-            while (true) {
-                std::unique_lock l(m_lock);
-                if (!chunk) return;
-
-                trackable = &this->trackable();
-                if (trackable->lock.try_lock()) break;
-
-                std::this_thread::yield();
-            }
-
-            closure();
-
-            trackable->lock.unlock();
-        }
 
         trackable_iterator(Chunk *chunk, std::size_t index)
                 : chunk(chunk), index(index) {
@@ -783,6 +775,54 @@ public:
             if (!trackable.have) trackable.have = true;
         }
 
+        void do_move_ctr(trackable_iterator &&other){
+            next = other.next;
+            prev = other.prev;
+
+            chunk = other.chunk;
+            index = other.index;
+
+            other.chunk = nullptr;
+
+            if (prev) prev->next = this;
+            if (next) next->prev = this;
+
+            if (!prev) {
+                assert(trackable().first == &other);
+                trackable().first = this;
+            }
+        }
+
+        void do_dstr(){
+            if (!chunk) return;
+
+            typename Chunk::Trackable &trackable = this->trackable();
+            assert(trackable.have);
+
+            if (!prev && !next) {
+                // the very last one
+                assert(trackable.first == this);
+
+                trackable.first = nullptr;
+                trackable.have = false;
+            } else if (!prev) {
+                // first
+                next->prev = nullptr;
+
+                assert(trackable.first == this);
+                trackable.first = next;
+            } else if (!next) {
+                // last
+                prev->next = nullptr;
+            } else {
+                // in between
+                prev->next = next;
+                next->prev = prev;
+            }
+
+            chunk = nullptr;
+        }
+
     public:
         trackable_iterator(Iterator &iter)
                 : trackable_iterator(iter.chunk, iter.index) {}
@@ -791,54 +831,44 @@ public:
 
 
         trackable_iterator(trackable_iterator &&other) {
-            other.under_trackable_lock([&]() {
-                std::unique_lock<Lock> l(m_lock);
+            auto other_locks = threading::lock_functional(
+                [&](){ return &other.m_lock;},
+                [&](){ return (!other.chunk ? nullptr : &other.trackable().lock);}
+            );
+            if (!other.chunk) return;
+            std::unique_lock<Lock> l(m_lock);
 
-                next = other.next;
-                prev = other.prev;
+            do_move_ctr(std::move(other));
+        }
 
-                chunk = other.chunk;
-                index = other.index;
 
-                other.chunk = nullptr;
+        trackable_iterator& operator=(trackable_iterator&& other){
+            if (this == &other) return *this;
 
-                if (prev) prev->next = this;
-                if (next) next->prev = this;
+            auto other_locks = threading::lock_functional(
+                [&](){ return &other.m_lock;},
+                [&](){ return (!other.chunk ? nullptr : &other.trackable().lock);}
+            );
+            auto self_locks = threading::lock_functional(
+                [&](){ return &m_lock;},
+                [&](){ return (!chunk || (chunk == other.chunk && index == other.index) ? nullptr : &trackable().lock);}
+            );
 
-                if (!prev) {
-                    assert(trackable().first == &other);
-                    trackable().first = this;
-                }
-            });
+            do_dstr();
+
+            if (other.chunk) do_move_ctr(std::move(other));
+
+            return *this;
         }
 
         // TODO: add copy ctr
 
         ~trackable_iterator() {
-            under_trackable_lock([&]() {
-                typename Chunk::Trackable &trackable = chunk->trackables[index];
-
-                if (!prev && !next) {
-                    // the very last one
-                    assert(trackable.first == this);
-
-                    trackable.first = nullptr;
-                    trackable.have = false;
-                } else if (!prev) {
-                    // first
-                    next->prev = nullptr;
-
-                    assert(trackable.first == this);
-                    trackable.first = next;
-                } else if (!next) {
-                    // last
-                    prev->next = nullptr;
-                } else {
-                    // in between
-                    prev->next = next;
-                    next->prev = prev;
-                }
-            });
+            auto locks = threading::lock_functional(
+                [&](){ return &m_lock;},
+                [&](){ return (!chunk ? nullptr : &trackable().lock);}
+            );
+            do_dstr();
         }
 
 
@@ -882,14 +912,15 @@ public:
                 std::unique_lock<Lock> l(m_lock);
                 if (!chunk) return {nullptr, nullptr};
 
-                if (chunk->lock.try_lock()) break;
+                if (shared ? chunk->lock.try_lock_shared() : chunk->lock.try_lock()) break;
                 std::this_thread::yield();
             }
 
             if (settings::trackable_iterator_check_aliveness) {
-                if (!chunk->aliveness[index].load(
-                        settings::erase_immideatley ? std::memory_order_acquire : std::memory_order_relaxed))
+                if (!chunk->is_alive_fast_check(index)) {
+                    shared ? chunk->lock.unlock_shared() : chunk->lock.unlock();
                     return {nullptr, nullptr};
+                }
             }
 
             return {chunk, &chunk->array()[index]};
