@@ -36,13 +36,13 @@ struct BigData {
         :value(value)
     {}
 
-    //std::array<char, 1> payload;
+    std::array<char, 1> payload;
 };
 
 
 void benchmark_iterate(int times) {
-    const int size = 1000;
-    static constexpr const int threads_count = 4;
+    const int size = 10000;
+    static constexpr const int threads_count = 0;
 
     SyncedChunkedArray<BigData> arr;       // 512 for benchmark
     std::vector<BigData> vec;
@@ -67,7 +67,7 @@ void benchmark_iterate(int times) {
 
     // random erase
     {
-        const float erase_probability = 50;        // 50 - worst case
+        const float erase_probability = 0;        // 50 - worst case
         const int break_point = std::round(RAND_MAX * erase_probability / 100.0);
         auto t = measure([&]() {
             std::size_t i = 0;
@@ -111,19 +111,20 @@ void benchmark_iterate(int times) {
 
 
     {
-        std::size_t sum{0};
-        std::size_t iterate_count{0};
+        std::atomic<std::size_t> sum{0};
+        std::atomic<std::size_t> iterate_count{0};
 
         auto t = benchmark_threaded_read(times, [&]() {
-            for(auto& i : vec) {
-                //i.i++;
+            std::size_t local_sum{0};
+            std::size_t local_iterate_count{0};
 
-                iterate_count++;
-                //sum += i();
-                //if (!i.first) continue;
-                sum += i.value;
-                //i.i--;
+            for(auto& i : vec) {
+                local_iterate_count++;
+                local_sum += i.value;
             }
+
+            sum += local_sum;
+            iterate_count += local_iterate_count;
         });
 
         std::cout << "vec: " << t << " [" << sum << "] it: "  <<  iterate_count << std::endl;
@@ -131,20 +132,19 @@ void benchmark_iterate(int times) {
 
 
     {
-        std::size_t sum{0};
-        std::size_t iterate_count{0};
+        std::atomic<std::size_t> sum{0};
+        std::atomic<std::size_t> iterate_count{0};
         auto t = benchmark_threaded_read(times, [&]() {
-            /*auto r = arr.range();
-            auto iter = ForIterator(r);
-            for(auto i : iter) {
-                sum += *i;
-            }*/
-            //arr.iterate([](auto &&) {});
-            arr.iterate_shared([&](const auto &i) {
-                iterate_count++;
-                //sum += i();
-                sum += (*i).value;
+            std::size_t local_sum{0};
+            std::size_t local_iterate_count{0};
+
+            arr.iterate([&](const auto &i) {
+                local_iterate_count++;
+                local_sum += (*i).value;
             });
+
+            sum += local_sum;
+            iterate_count += local_iterate_count;
         });
 
         std::cout << "ChunkedArray: " << t << " [" << sum << "] it: " <<  iterate_count << std::endl;
