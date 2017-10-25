@@ -1,6 +1,6 @@
 ## Description
 
-`SyncedChunkedArray` is thread-safe, unordered deque-like container, which allow iteration with thread-safe element access at `std::deque` / `std::vector` speed. Plus it have non-invalidatable iterators (`trackable_iterator`).
+`SyncedChunkedArray` is thread-safe, unordered container, which allow iteration with thread-safe element access at `std::deque` / `std::vector` speed. Plus it have non-invalidatable iterators (`trackable_iterator`).
 
 High iteration speed achieved by:
 
