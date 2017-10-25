@@ -34,7 +34,7 @@ int main(){
       if (*iter > 500){
         list.erase(iter);
       } else {
-        (*iter)++;              // element under unique_lock, we can safely mutate it.
+        (*iter)++;                  // element under unique_lock, we can safely mutate it.
       }
       last_iterated = {iter};		// carefull, trackable_iterator move is relativley costly.
     });
