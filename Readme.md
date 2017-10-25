@@ -69,6 +69,9 @@ int main(){
 `SyncedChunkedArray<T>::trackable_iterator ` have:
 
 * lock() - Lock elements chunk. return `access` to element. Chunk unlocked on `access` destruction.
+* lock_shared() - same as `lock()`, but use shared_lock.
+* try_lock() - under construction
+* try_lock_shared() - under construction
 
 ## Structure
 
