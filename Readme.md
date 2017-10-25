@@ -49,6 +49,24 @@ int main(){
 }
 ```
 
+`SyncedChunkedArray` have:
+
+* emplace(args...)  - in-place construct element in container. Return lambda. Lambda return `trackable_iterator`. Do not store lambda. `empalce` does not lock/block.
+
+* erase(Iterator) - mark element as erased. If `SyncedChunkedArray::erase_immideatley` is true, tries lock chunk, and maintain, thus destroy element immediately.
+
+* erase(trackable_iterator) - same as `erase(Iterator)`
+
+* iterate - executes closure with `Iterator` as parameter. Lock each chunk with exclusive(write) lock.
+
+* iterate_shared - same as `iterate`, but chunks locked with shared (read) lock.
+
+  ​
+
+`SyncedChunkedArray<T>::trackable_iterator ` have:
+
+* lock() - Lock elements chunk. return `access` to element. Chunk unlocked on `access` destruction.
+
 ## Structure
 
 SyncedChunkedArray is a deque-like container. It consists from `Chunk`s of fixed size. 
@@ -102,7 +120,7 @@ Thus, we can iterate from multiple threads, without need to lock each element se
 
 ## Maintance
 
-Maintance may occur only on locked `Chunk::lock`.
+Maintance may occur only on exclusively locked `Chunk::lock`.
 
 Maintance include:
 
@@ -142,8 +160,8 @@ We try to reuse not full chunks (from `free_list`), before we create new one. `e
 
 `trackable_iterator` is somewhat similar to weak_ptr. It have `lock()`, which allow you to access element under chunk lock, and prevent chunk maintance (element does not move).
 
-You can get it from `emplace()` and construct from `Iterator` (during `iterate()`).
+You can get it from `emplace()`, and construct from `Iterator` (during `iterate()`).
 
-When maintance occurs, element may be moved. If element have trackable_iterators, they all will be updated with it new address (actually chunk/index).
+When maintance occurs, element may be moved. If element have trackable_iterators, they all will be updated with its new address (actually chunk/index).
 
 Price to call `trackable_iterator.lock()` is similar to `weak_ptr.lock()`. But unlike `weak_ptr.lock()` which only guarantee object aliveness, `trackable_iterator` also provide object thread-safety.
