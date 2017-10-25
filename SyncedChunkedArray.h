@@ -192,7 +192,7 @@ private:
         FreeList() {}
 
         FreeList(FreeList &&other) {
-            std::unique_lock l(other.lock);
+            std::unique_lock<FreeListLock> l(other.lock);
             first = other.first;
             is_empty = other.is_empty.load();
         }
@@ -215,7 +215,7 @@ private:
 
             if (!chunk->in_free_list) return;
 
-            std::unique_lock l(lock);       // it's ok, we have fixed lock order
+            std::unique_lock<FreeListLock> l(lock);       // it's ok, we have fixed lock order
             if (chunk->prev_free)
                 chunk->prev_free->next_free = chunk->next_free;
 
@@ -235,7 +235,7 @@ private:
 
             if (chunk->in_free_list) return;
 
-            std::unique_lock l(lock);    // it's ok, we have fixed lock order
+            std::unique_lock<FreeListLock> l(lock);    // it's ok, we have fixed lock order
 
             chunk->next_free = first;
             if (first) first->prev_free = chunk;
@@ -253,7 +253,7 @@ private:
     template<class Closure>
     static void iterate_trackable_iterators(trackable_iterator *iter, Closure &&closure) {
         while (iter) {
-            std::unique_lock l(iter->m_lock);
+            std::unique_lock<typename trackable_iterator::Lock> l(iter->m_lock);
             closure(iter);
 
             iter = iter->next;
@@ -426,7 +426,7 @@ private:
             std::unique_lock<typename SelfPtr::Lock> self_ptr_lock;
             Self *self = p_self;
             if (!self) {
-                self_ptr_lock = std::unique_lock{chunk->self_ptr->lock};
+                self_ptr_lock = std::unique_lock<typename SelfPtr::Lock>(chunk->self_ptr->lock);
                 self = chunk->self_ptr->ptr;
             }
             if (self) {
@@ -457,11 +457,11 @@ private:
         auto try_merge_with = [&](Chunk *other) -> bool {
             if (!can_merge(chunk, other)) return false;
 
-            std::unique_lock l(other->lock, std::try_to_lock);
+            std::unique_lock<typename Chunk::Lock> l(other->lock, std::try_to_lock);
             if (!l) return false;
 
-            std::unique_lock l_m_chunk{chunk->maintance_lock, std::defer_lock};
-            std::unique_lock l_m_other{other->maintance_lock, std::defer_lock};
+            std::unique_lock<typename Chunk::MaintanceLock> l_m_chunk{chunk->maintance_lock, std::defer_lock};
+            std::unique_lock<typename Chunk::MaintanceLock> l_m_other{other->maintance_lock, std::defer_lock};
             std::lock(l_m_chunk, l_m_other);
 
             if (!can_merge(chunk, other)) return false;
@@ -499,7 +499,7 @@ private:
             if (chunk->alive_size() > 0 || chunk->is_first) return false;
 
             // try just delete
-            std::unique_lock l_m{chunk->maintance_lock};
+            std::unique_lock<typename Chunk::MaintanceLock> l_m{chunk->maintance_lock};
             if (chunk->alive_size() > 0 || chunk->is_first) return false;
 
             try_remove_from_free_list(p_self, chunk, l_m);
@@ -525,7 +525,7 @@ private:
 
             // still need compact?
             if (chunk->deleted_count > 0) {
-                std::unique_lock l_m{chunk->maintance_lock};
+                std::unique_lock<typename Chunk::MaintanceLock> l_m{chunk->maintance_lock};
                 compact(chunk, l_m);
                 try_add_to_free_list(p_self, chunk, l_m);
             }
@@ -571,18 +571,18 @@ public:
 
     // may block, till all trackable_iterators will be released
     ~SyncedChunkedArray() {
-        std::unique_lock l_other(self_ptr->lock);
+        std::unique_lock<typename SelfPtr::Lock> l_other(self_ptr->lock);
         self_ptr->ptr = nullptr;
 
         {
-            std::unique_lock l(first_lock);
+            std::unique_lock<FirstLock> l(first_lock);
             std::shared_ptr<Chunk> chunk = first;
             while (chunk) {
                 std::shared_ptr<Chunk> next;
                 {
                     // fixed lock order
-                    std::unique_lock l_chunk(chunk->lock);
-                    std::unique_lock l_maintain(chunk->maintance_lock);
+                    std::unique_lock<typename Chunk::Lock> l_chunk(chunk->lock);
+                    std::unique_lock<typename Chunk::MaintanceLock> l_maintain(chunk->maintance_lock);
 
                     next = std::atomic_load(&chunk->next);
                     chunk->next = nullptr;
@@ -595,22 +595,23 @@ public:
     }
 
     template<class ...Args>
-    auto emplace(Args &&...args) {
+    auto emplace(Args&&...args) {
         Chunk *chunk;       // can't be merged/deleted while under lock
 
-        std::unique_lock<typename Chunk::MaintanceLock> l_maintance;
+		using ULMaintance = std::unique_lock<typename Chunk::MaintanceLock>;
+		ULMaintance l_maintance;
 
         chunk = free_list.get_first_under_maintance_lock(l_maintance);
 
         if (!chunk) {
-            std::unique_lock l(first_lock);
+            std::unique_lock<FirstLock> l(first_lock);
 
             if (!first) {
                 first = std::make_shared<Chunk>(self_ptr);
                 first->is_first = true;
             }
 
-            l_maintance = std::unique_lock{first->maintance_lock};
+            l_maintance = ULMaintance(first->maintance_lock);
             if (first->is_full()) {
                 auto chunk = std::make_shared<Chunk>(self_ptr);
 
@@ -622,7 +623,7 @@ public:
                     first = std::move(chunk);
                 prev_first->is_first = false;
 
-                l_maintance = std::unique_lock{first->maintance_lock};
+                l_maintance = ULMaintance(first->maintance_lock);
             }
 
             chunk = first.get();
@@ -684,7 +685,7 @@ public:
         {
             std::shared_ptr < Chunk > chunk;
             {
-                std::unique_lock l(first_lock);
+                std::unique_lock<FirstLock> l(first_lock);
                 chunk = first;
             }
 
@@ -730,7 +731,7 @@ public:
     std::size_t get_chunks_count() {
         std::shared_ptr < Chunk > chunk;
         {
-            std::unique_lock l(first_lock);
+            std::unique_lock<FirstLock> l(first_lock);
             chunk = first;
         }
 
@@ -764,7 +765,7 @@ public:
             assert(chunk);
 
             typename Chunk::Trackable &trackable = this->trackable();
-            std::unique_lock l(trackable.lock);
+            std::unique_lock<typename Chunk::Trackable::Lock> l(trackable.lock);
 
             trackable_iterator *was = trackable.first;
             trackable.first = this;
