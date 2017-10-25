@@ -5,5 +5,5 @@ set(CMAKE_CXX_STANDARD 17)
 
 #SET( CMAKE_CXX_FLAGS  "-pthread")
 
-set(SOURCE_FILES main.cpp ../SyncedChunkedArray.h benchmark.h)
+set(SOURCE_FILES main.cpp ../SyncedChunkedArray.h)
 add_executable(SyncedChunkedArray_test ${SOURCE_FILES})

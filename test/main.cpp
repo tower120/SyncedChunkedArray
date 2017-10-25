@@ -2,7 +2,6 @@
 #include "../SyncedChunkedArray.h"
 //#include "../v2/SyncedChunkedArray.h"
 
-#include "benchmark.h"
 #include "reuse_test.h"
 
 
@@ -84,9 +83,11 @@ void test_trackable_iterator_move(){
 int main() {
 
     //reuse_test().run();
-    benchmark_iterate(10000);
     //test_trackable_iterator_erase();
     //test_trackable_iterator_move();
+
+	char ch;
+	std::cin >> ch;
 
     return 0;
 }
