@@ -172,6 +172,7 @@ When maintance occurs, element may be moved. If element have trackable_iterators
 
 Price to call `trackable_iterator.lock()` is similar to `weak_ptr.lock()`. But unlike `weak_ptr.lock()` which only guarantee object aliveness, `trackable_iterator` also provide object thread-safety.
 
+P.S. If you use have many trackable_iterators pointing to the same container element, it is, probably, better to use one `std::shared_ptr<trackable_iterator>` instead; because move of element in container, will cause update of all trackable_iterators pointing to it.
 
 
 ---
