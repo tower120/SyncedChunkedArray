@@ -2,6 +2,7 @@
 #define SYNCCHUNKEDARRAY_REUSE_TEST_H
 
 #include <numeric>
+#include <cmath>
 #include "../SyncedChunkedArray.h"
 
 struct reuse_test{
