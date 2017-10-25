@@ -16,7 +16,7 @@ You may call `emplace` /`erase` at any time, even right from the iteration loop.
 
 ## How to use
 
-You need `SyncedChunkedArray.h` and `threading` folder.
+You need `SyncedChunkedArray.h` and `threading` folder. Elements must be movable.
 Example:
 
 ```C++
@@ -27,6 +27,7 @@ int main(){
   for(int i=0;i<4000;i++)list.emplace(i);
 
   SyncedChunkedArray<int>::trackable_iterator two_iter = list.emplace(2)();
+  SyncedChunkedArray<int>::trackable_iterator last_iterated;
   
   auto fn = [&](){
     list.iterate([&](auto iter){
@@ -35,6 +36,7 @@ int main(){
       } else {
         (*iter)++;
       }
+      last_iterated = {iter};		// carefull, trackable_iterator move is relativley costly.
     });
   };
   
@@ -43,7 +45,8 @@ int main(){
   t1.join();
   t2.join();
   
-  std::cout << *two_iter.lock();    // Output: 4
+  std::cout << *two_iter.lock() << std::endl;        // Output: 4
+  std::cout << *last_iterated.lock() << std::endl;   // May be any number, iteration is unordered
   
   return 0;
 }
@@ -165,3 +168,15 @@ You can get it from `emplace()`, and construct from `Iterator` (during `iterate(
 When maintance occurs, element may be moved. If element have trackable_iterators, they all will be updated with its new address (actually chunk/index).
 
 Price to call `trackable_iterator.lock()` is similar to `weak_ptr.lock()`. But unlike `weak_ptr.lock()` which only guarantee object aliveness, `trackable_iterator` also provide object thread-safety.
+
+
+
+---
+
+# N.B.
+
+* `SyncedChunkedArray` move now may be not-thread safe (I'm not sure).
+* `~SyncedChunkedArray()` will block, untill all iterations finishes, and all trackable_iterators unlocks.
+
+
+* As you can see, it is theoretically possible to have ordered `SyncedChunkedArray`. With only `emplace_back()`, `erase`, `iterate` operations. compact/merge operation will cost higher, all other the same. Let me know, if you have need in this.
