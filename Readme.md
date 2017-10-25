@@ -6,7 +6,7 @@ High iteration speed achieved by:
 
 - elements stored continuously in chunks.
 - You don't need to lock each element separately.
-- Locked chunks iteration postponed.
+- Locked chunks are skipped during iteration. Skipped chunks iterates later.
 
 Thread-safe element access works on per-chunk lock basis. Lock chunk - lock its all elements. This, may introduce some lock granularity, when accessing from multiple threads to elements from the same chunk (through `trackable_iterator`); you'll have sequenced access at worst case. Smaller chunks - means smaller granularity.
 
